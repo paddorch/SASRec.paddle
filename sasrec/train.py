@@ -62,7 +62,7 @@ def train(sampler, model, args, num_batch, dataset):
             targets = (pos != 0).astype(dtype='int32')
             # targets = targets.reshape((args.batch_size*args.maxlen, -1))
             loss = criterion(pos_logits, neg_logits, targets)
-            for param in model.item_embedding.parameters():
+            for param in model.item_emb.parameters():
                 loss += args.l2_emb * paddle.norm(param)
             loss.backward()
             epoch_loss += loss.numpy()[0]
@@ -74,7 +74,7 @@ def train(sampler, model, args, num_batch, dataset):
                 valid_pair = evaluate(dataset, model, epoch, i_batch, args, is_val=True)
                 if best_pair is None or valid_pair > best_pair:
                     best_pair = valid_pair
-                    file_path = '%s/SASRec_best_tfm.pth.tar' % (args.save_folder)
+                    file_path = '%s/SASRec_best.pth.tar' % (args.save_folder)
                     print("=> found better validated model, saving to %s" % file_path)
                     save_checkpoint(model,
                                     {'epoch': epoch,

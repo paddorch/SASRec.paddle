@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import errno
 import os
 
 import paddle
@@ -55,9 +54,9 @@ experiment.add_argument('--log_config', default=True, action='store_true', help=
 experiment.add_argument('--log_result', default=True, action='store_true', help='Store experiment result')
 experiment.add_argument('--log_interval', type=int, default=30,
                         help='how many steps to wait before logging training status')
-experiment.add_argument('--val_interval', type=int, default=600,
+experiment.add_argument('--val_interval', type=int, default=800,
                         help='how many steps to wait before vaidation')
-experiment.add_argument('--val_start_batch', type=int, default=6000,
+experiment.add_argument('--val_start_batch', type=int, default=8000,
                         help='how many steps to wait before vaidation')
 experiment.add_argument('--save_interval', type=int, default=20,
                         help='how many epochs to wait before saving')

@@ -5,4 +5,4 @@ python run.py \
   --num_heads=1 \
   --device=0 \
   --test=True\
-  --model_path=output/SASRec_best.pth.tar
+  --model_path=output/SASRec_epoch_420.pth.tar
