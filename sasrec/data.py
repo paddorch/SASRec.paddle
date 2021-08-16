@@ -2,7 +2,6 @@ import sys
 import copy
 import random
 import numpy as np
-from collections import defaultdict
 from multiprocessing import Process, Queue
 
 
@@ -35,7 +34,7 @@ def sample_function(user_train, usernum, itemnum, batch_size, maxlen, result_que
             idx -= 1
             if idx == -1: break
 
-        return (user, seq, pos, neg)
+        return (user, seq, pos, neg)  # TODO
 
     if result_queue is None:
         np.random.seed(SEED)
