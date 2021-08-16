@@ -2,7 +2,6 @@ import sys
 import copy
 import random
 import numpy as np
-from collections import defaultdict
 from multiprocessing import Process, Queue
 
 

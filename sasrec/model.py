@@ -1,144 +1,47 @@
-import time
 import numpy as np
-# import torch
 import paddle
-import paddle.nn.functional as F
+import paddle.nn as nn
 
-
-class MyBCEWithLogitLoss(paddle.nn.Layer):
-    def __init__(self):
-        super(MyBCEWithLogitLoss, self).__init__()
-
-    def forward(self, pos_logits, neg_logits, labels):
-        return paddle.sum(
-            - paddle.log(F.sigmoid(pos_logits) + 1e-24) * labels -
-            paddle.log(1 - F.sigmoid(neg_logits) + 1e-24) * labels,
-            axis=(0, 1)
-        ) / paddle.sum(labels, axis=(0, 1))
-
-
-class PointWiseFeedForward(paddle.nn.Layer):
-    def __init__(self, hidden_units, dropout, initializer):
-        super(PointWiseFeedForward, self).__init__()
-
-        self.conv1 = paddle.nn.Conv1D(hidden_units, hidden_units, kernel_size=1,
-                                      weight_attr=paddle.ParamAttr(initializer=initializer))
-        self.dropout1 = paddle.nn.Dropout(p=dropout)
-        self.relu = paddle.nn.ReLU()
-        self.conv2 = paddle.nn.Conv1D(hidden_units, hidden_units, kernel_size=1,
-                                      weight_attr=paddle.ParamAttr(initializer=initializer))
-        self.dropout2 = paddle.nn.Dropout(p=dropout)
-
-    def forward(self, inputs):
-        outputs = self.dropout2(self.conv2(self.relu(self.dropout1(self.conv1(inputs.transpose((0, 2, 1)))))))
-        outputs = outputs.transpose((0, 2, 1))  # as Conv1D requires (N, C, Length)
-        outputs += inputs
-        return outputs
-
-
-# pls use the following self-made multihead attention layer
-# in case your pytorch version is below 1.16 or for other reasons
-# https://github.com/pmixer/TiSASRec.pytorch/blob/master/model.py
 
 class SASRec(paddle.nn.Layer):
-    def __init__(self, user_num, item_num, args):
+    def __init__(self, item_num, args):
         super(SASRec, self).__init__()
+        self.item_embedding = nn.Embedding(item_num + 1, args.hidden_units)  # [pad] is 0
+        self.position_embedding = nn.Embedding(args.maxlen, args.hidden_units)
+        self.embed_dropout = paddle.nn.Dropout(p=args.dropout)
 
-        # self.T = 0
-        xavier_init = paddle.nn.initializer.XavierNormal()
+        self.subsequent_mask = (paddle.triu(paddle.ones((args.maxlen, args.maxlen))) == 0)
+        self.encoder_layer = nn.TransformerEncoderLayer(d_model=args.hidden_units,
+                                                        nhead=args.num_heads,
+                                                        dim_feedforward=args.hidden_units,
+                                                        dropout=args.dropout)
+        self.encoder = nn.TransformerEncoder(encoder_layer=self.encoder_layer, num_layers=args.num_blocks)
 
-        self.user_num = user_num
-        self.item_num = item_num
+    def position_encoding(self, seqs):
+        seqs_embed = self.item_embedding(seqs)  # (batch_size, max_len, embed_size)
+        positions = np.tile(np.array(range(seqs.shape[1])), [seqs.shape[0], 1])
+        position_embed = self.position_embedding(paddle.to_tensor(positions, dtype='int64'))
+        return self.embed_dropout(seqs_embed + position_embed)
 
-        # TODO: loss += args.l2_emb for regularizing embedding vectors during training
-        # https://stackoverflow.com/questions/42704283/adding-l1-l2-regularization-in-pytorch
-        self.item_emb = paddle.nn.Embedding(self.item_num + 1, args.hidden_units, padding_idx=0)
-        self.pos_emb = paddle.nn.Embedding(args.maxlen, args.hidden_units)  # TO IMPROVE
-        self.emb_dropout = paddle.nn.Dropout(p=args.dropout)
+    def forward(self, log_seqs, pos_seqs, neg_seqs):
+        # all input seqs: (batch_size, seq_len)
+        seqs_embed = self.position_encoding(log_seqs)  # (batch_size, seq_len, embed_size)
+        log_feats = self.encoder(seqs_embed, self.subsequent_mask)  # (batch_size, seq_len, embed_size)
 
-        self.attention_layernorms = paddle.nn.LayerList()  # to be Q for self-attention
-        self.attention_layers = paddle.nn.LayerList()
-        self.forward_layernorms = paddle.nn.LayerList()
-        self.forward_layers = paddle.nn.LayerList()
+        pos_embed = self.item_embedding(pos_seqs)  # (batch_size, seq_len, embed_size)
+        neg_embed = self.item_embedding(neg_seqs)
 
-        self.last_layernorm = paddle.nn.LayerNorm(args.hidden_units, epsilon=1e-8,
-                                                  weight_attr=paddle.ParamAttr(initializer=xavier_init))
+        pos_logits = (log_feats * pos_embed).sum(axis=-1)
+        neg_logits = (log_feats * neg_embed).sum(axis=-1)
 
-        for _ in range(args.num_blocks):
-            new_attn_layernorm = paddle.nn.LayerNorm(args.hidden_units, epsilon=1e-8,
-                                                     weight_attr=paddle.ParamAttr(initializer=xavier_init))
-            self.attention_layernorms.append(new_attn_layernorm)
+        return pos_logits, neg_logits
 
-            new_attn_layer = paddle.nn.MultiHeadAttention(args.hidden_units,
-                                                          args.num_heads,
-                                                          args.dropout,
-                                                          weight_attr=paddle.ParamAttr(initializer=xavier_init))
-            self.attention_layers.append(new_attn_layer)
+    def predict(self, log_seqs, item_indices):  # for inference
+        seqs = self.pe(log_seqs)
+        log_feats = self.encoder(seqs, self.subsequent_mask)  # (batch_size, seq_len, embed_size)
 
-            new_fwd_layernorm = paddle.nn.LayerNorm(args.hidden_units, epsilon=1e-8,
-                                                    weight_attr=paddle.ParamAttr(initializer=xavier_init))
-            self.forward_layernorms.append(new_fwd_layernorm)
-
-            new_fwd_layer = PointWiseFeedForward(args.hidden_units, args.dropout, xavier_init)
-            self.forward_layers.append(new_fwd_layer)
-
-            # self.pos_sigmoid = torch.nn.Sigmoid()
-            # self.neg_sigmoid = torch.nn.Sigmoid()
-
-    def log2feats(self, log_seqs):
-        seqs = self.item_emb(log_seqs)  # (bs, sl, hs)
-        seqs *= self.item_emb._embedding_dim ** 0.5
-        positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
-        seqs += self.pos_emb(paddle.to_tensor(positions, dtype='int64'))
-        seqs = self.emb_dropout(seqs)
-
-        timeline_mask = paddle.to_tensor(log_seqs == 0, dtype='bool')
-        seqs *= paddle.logical_not(timeline_mask.unsqueeze(-1))  # broadcast in last dim
-
-        tl = seqs.shape[1]  # time dim len for enforce causality
-        attention_mask = paddle.logical_not(paddle.tril(paddle.ones((tl, tl), dtype='bool')))
-
-        # t0 = time.time()
-        for i in range(len(self.attention_layers)):
-            Q = self.attention_layernorms[i](seqs)
-            mha_outputs = self.attention_layers[i](Q, seqs, seqs,
-                                                   attn_mask=attention_mask)
-            # key_padding_mask=timeline_mask
-            # need_weights=False) this arg do not work?
-            seqs = Q + mha_outputs
-
-            seqs = self.forward_layernorms[i](seqs)
-            seqs = self.forward_layers[i](seqs)
-            seqs *= paddle.logical_not(timeline_mask.unsqueeze(-1))
-        # self.T += (time.time() - t0)
-
-        log_feats = self.last_layernorm(seqs)  # (U, T, C) -> (U, -1, C)
-
-        return log_feats
-
-    def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs):  # for training
-        log_feats = self.log2feats(log_seqs)  # user_ids hasn't been used yet
-
-        pos_embs = self.item_emb(pos_seqs)
-        neg_embs = self.item_emb(neg_seqs)
-
-        pos_logits = (log_feats * pos_embs).sum(axis=-1)
-        neg_logits = (log_feats * neg_embs).sum(axis=-1)
-
-        # pos_pred = self.pos_sigmoid(pos_logits)
-        # neg_pred = self.neg_sigmoid(neg_logits)
-
-        return pos_logits, neg_logits  # pos_pred, neg_pred
-
-    def predict(self, user_ids, log_seqs, item_indices):  # for inference
-        log_feats = self.log2feats(log_seqs)  # user_ids hasn't been used yet
-
-        final_feat = log_feats[:, -1, :]  # only use last QKV classifier, a waste
-
-        item_embs = self.item_emb(item_indices)  # (U, I, C)
+        final_feat = log_feats[:, -1, :]
+        item_embs = self.item_embedding(paddle.to_tensor(item_indices, dtype='int64'))
 
         logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1)
-
-        # preds = self.pos_sigmoid(logits) # rank same item list for different users
-
-        return logits  # preds # (U, I)
+        return logits

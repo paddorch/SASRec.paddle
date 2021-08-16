@@ -5,10 +5,12 @@ import random
 import numpy as np
 from collections import defaultdict
 
+
 def set_seed(seed):
     random.seed(seed)
     np.random.seed(seed)
     paddle.seed(seed)
+
 
 # train/val/test data generation
 def data_partition(fname):

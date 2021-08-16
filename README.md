@@ -18,7 +18,6 @@ A PaddlePaddle implementation of Self-Attentive Sequential Recommendation.
 
 - Python >= 3
 - PaddlePaddle >= 2.0.0
-- PaddleNLP >= 2.0.0
 - see `requirements.txt`
 
 ## Dataset
@@ -30,14 +29,6 @@ A PaddlePaddle implementation of Self-Attentive Sequential Recommendation.
 ## Usage
 
 ### Train
-
-1. 下载[数据集](https://raw.githubusercontent.com/kang205/SASRec/master/data/ml-1m.txt)到 `data/preprocessed` 文件夹
-
-```shell
-python preprocess.py
-```
-
-2. 开始训练
 
 ```shell
 bash train.sh
