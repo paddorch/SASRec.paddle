@@ -3,7 +3,7 @@ A PaddlePaddle implementation of Self-Attentive Sequential Recommendation.
 
 ## Introduction
 
-![model](.\images\model.png)
+![model](images/model.png)
 
 论文：[Self-Attentive Sequential Recommendation](https://arxiv.org/pdf/1808.09781.pdf)
 
@@ -22,7 +22,7 @@ A PaddlePaddle implementation of Self-Attentive Sequential Recommendation.
 
 ## Dataset
 
-![result](.\images\dataset.png)
+![dataset](images/dataset.png)
 
 本次实验中，我们采用了原作者处理后的数据集，剔除了活动次数少于 5 的用户记录，清洗后格式后`<user id, item id>`，以`user id`为第一关键字、`time`为第二关键字排序。
 
@@ -48,7 +48,7 @@ bash eval.sh
 
 可以得到如下结果：
 
-![result](.\images\result.png)
+![result](images/result.png)
 
 模型在 200 epochs 左右收敛，继续训练性能会有小幅提升。
 
