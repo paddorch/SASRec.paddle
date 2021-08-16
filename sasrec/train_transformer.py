@@ -15,10 +15,10 @@ from paddle import optimizer
 from paddle.io import DataLoader
 import numpy as np
 
-from model import SASRec, MyBCEWithLogitLoss
-from data import WarpSampler, sample_function
+from model_transformer import SASRec, MyBCEWithLogitLoss
+from data import WarpSampler
 from utils import set_seed, data_partition
-from eval import evaluate
+from eval_transformer import evaluate
 
 set_seed(42)
 
@@ -32,7 +32,7 @@ learn = parser.add_argument_group('Learning options')
 learn.add_argument('--lr', type=float, default=0.001, help='initial learning rate [default: 0.01]')
 learn.add_argument('--epochs', type=int, default=601, help='number of epochs for train [default: 200]')
 learn.add_argument('--batch_size', type=int, default=128, help='batch size for training [default: 50]')
-learn.add_argument('--optimizer', default='Adam',
+learn.add_argument('--optimizer', default='AdamW',
                    help='Type of optimizer. Adagrad|Adam|AdamW are supported [default: Adagrad]')
 # model
 model_cfg = parser.add_argument_group('Model options')
@@ -40,7 +40,7 @@ model_cfg.add_argument('--hidden_units', type=int, default=50,
                        help='hidden size of LSTM [default: 300]')
 model_cfg.add_argument('--maxlen', type=int, default=200,
                        help='hidden size of LSTM [default: 300]')
-model_cfg.add_argument('--dropout', type=float, default=0.5, help='the probability for dropout [default: 0.5]')
+model_cfg.add_argument('--dropout', type=float, default=0.2, help='the probability for dropout [default: 0.5]')
 model_cfg.add_argument('--l2_emb', type=float, default=0.0, help='penalty term coefficient [default: 0.1]')
 model_cfg.add_argument('--num_blocks', type=int, default=2,
                        help='d_a size [default: 150]')
@@ -62,11 +62,13 @@ experiment.add_argument('--save_folder', default='../output/',  # TODO
                         help='Location to save epoch models, training configurations and results.')
 experiment.add_argument('--log_config', default=True, action='store_true', help='Store experiment configuration')
 experiment.add_argument('--log_result', default=True, action='store_true', help='Store experiment result')
-experiment.add_argument('--log_interval', type=int, default=20,
+experiment.add_argument('--log_interval', type=int, default=30,
                         help='how many steps to wait before logging training status [default: 1]')
-experiment.add_argument('--val_interval', type=int, default=800,
+experiment.add_argument('--val_interval', type=int, default=500,
                         help='how many steps to wait before vaidation [default: 400]')
-experiment.add_argument('--save_interval', type=int, default=10,
+experiment.add_argument('--val_start_batch', type=int, default=8000,
+                        help='how many steps to wait before vaidation [default: 400]')
+experiment.add_argument('--save_interval', type=int, default=20,
                         help='how many epochs to wait before saving [default:1]')
 
 
@@ -100,11 +102,12 @@ def train(sampler, model, args, num_batch, dataset):
 
     tot_batch = 0
     for epoch in range(start_epoch, args.epochs + 1):
+        epoch_loss = 0
         for i_batch in range(num_batch):
             tot_batch += 1
             u, seq, pos, neg = sampler.next_batch()  # tuples to ndarray
             u, seq, pos, neg = paddle.to_tensor(u, dtype='int64'), paddle.to_tensor(seq, dtype='int64'), paddle.to_tensor(pos), paddle.to_tensor(neg)
-            pos_logits, neg_logits = model(u, seq, pos, neg)    # ()
+            pos_logits, neg_logits = model(seq, pos, neg)    # ()
 
             targets = (pos != 0).astype(dtype='int32')
             # targets = targets.reshape((args.batch_size*args.maxlen, -1))
@@ -112,27 +115,27 @@ def train(sampler, model, args, num_batch, dataset):
             for param in model.item_emb.parameters():
                 loss += args.l2_emb*paddle.norm(param)
             loss.backward()
+            epoch_loss += loss.numpy()[0]
             optim.step()
             optim.clear_grad()
 
-            if i_batch % args.log_interval == 0:
-                print('Epoch[{}] Batch[{}] - loss: {:.8f}  lr: {:.5f}'.format(epoch,
-                                                                              i_batch,
-                                                                              loss.numpy()[0],
-                                                                              optim._learning_rate,
-                                                                              ))
             # validation
-            if tot_batch % args.val_interval == 0 and i_batch != 0:
-                valid_pair = evaluate(dataset, model, epoch, i_batch, args, is_val=False)
+            if tot_batch >= args.val_start_batch and tot_batch % args.val_interval == 0 and i_batch != 0:
+                valid_pair = evaluate(dataset, model, epoch, i_batch, args, is_val=True)
                 if best_pair is None or valid_pair > best_pair:
-                    file_path = '%s/SASRec_best.pth.tar' % (args.save_folder)
-                    print("\r=> found better validated model, saving to %s" % file_path)
+                    file_path = '%s/SASRec_best_tfm.pth.tar' % (args.save_folder)
+                    print("=> found better validated model, saving to %s" % file_path)
                     save_checkpoint(model,
                                     {'epoch': epoch,
                                      'optimizer': optim.state_dict(),
                                      'best_pair': best_pair},
                                     file_path)
                     best_pair = valid_pair
+
+        print('Epoch {:3} - loss: {:.4f}  lr: {:.5f}'.format(epoch,
+                                                              epoch_loss / num_batch,
+                                                              optim._learning_rate,
+                                                              ))
 
         if args.checkpoint and epoch % args.save_interval == 0:
             file_path = '%s/SASRec_epoch_%d.pth.tar' % (args.save_folder, epoch)
@@ -141,7 +144,6 @@ def train(sampler, model, args, num_batch, dataset):
                                     'optimizer': optim.state_dict(),
                                     'best_pair': best_pair},
                             file_path)
-        print('\n')
     sampler.close()
 
 
@@ -163,6 +165,7 @@ def main():
 
     [user_train, _, _, usernum, itemnum] = dataset
     num_batch = len(user_train) // args.batch_size  # tail? + ((len(user_train) % args.batch_size) != 0)
+    print("num_batch:", num_batch)
     cc = 0.0
     for u in user_train:
         cc += len(user_train[u])
@@ -191,7 +194,7 @@ def main():
             r.write('{:s},{:s},{:s},{:s},{:s}'.format('epoch', 'batch', 'loss', 'acc', 'lr'))
 
     # model
-    model = SASRec(usernum, itemnum, args)
+    model = SASRec(itemnum, args)
     print(model)
     # TODO init
 

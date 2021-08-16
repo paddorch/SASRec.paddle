@@ -15,9 +15,10 @@ from paddle.io import DataLoader
 import paddle.nn.functional as F
 import numpy as np
 
-from model import SASRec
-from utils import data_partition
+from model_transformer import SASRec
+from utils import data_partition, set_seed
 
+set_seed(42)
 
 def evaluate(dataset, model, epoch_train, batch_train, args, is_val=True):
     model.eval()
@@ -80,7 +81,7 @@ def evaluate(dataset, model, epoch_train, batch_train, args, is_val=True):
     HT /= valid_user
 
     model.train()
-    print('\nEpoch {} Evaluation - NDCG: {:.4f}  HIT@10: {:.4f}'.format(epoch_train, NDCG, HT))
+    print('\nEpoch {} Evaluation - NDCG: {:.4f}  HIT@10: {:.4f}'.format(epoch_train,  NDCG, HT))
     if args.log_result and is_val:
         with open(os.path.join(args.save_folder, 'result.csv'), 'a') as r:
             r.write('\n{:d},{:d},{:.4f},{:.4f}'.format(epoch_train,
@@ -88,7 +89,7 @@ def evaluate(dataset, model, epoch_train, batch_train, args, is_val=True):
                                                        NDCG,
                                                        HT))
 
-    return (NDCG, HT)
+    return (HT, NDCG)
 
 
 if __name__ == '__main__':
@@ -102,17 +103,18 @@ if __name__ == '__main__':
     learn.add_argument('--lr', type=float, default=0.001, help='initial learning rate [default: 0.01]')
     learn.add_argument('--epochs', type=int, default=601, help='number of epochs for train [default: 200]')
     learn.add_argument('--batch_size', type=int, default=128, help='batch size for training [default: 50]')
-    learn.add_argument('--optimizer', default='Adam',
+    learn.add_argument('--optimizer', default='AdamW',
                        help='Type of optimizer. Adagrad|Adam|AdamW are supported [default: Adagrad]')
     # model
     model_cfg = parser.add_argument_group('Model options')
-    model_cfg.add_argument('--model-path', default='../output/SASRec_best1.pth.tar',
+    model_cfg.add_argument('--model-path', default='../output/Submit_SASRec_epoch_400.pth.tar',
+    # model_cfg.add_argument('--model-path', default='../output/SASRec_best_tfm_save.pth.tar',
                         help='Path to pre-trained acouctics model created by DeepSpeech training')
     model_cfg.add_argument('--hidden_units', type=int, default=50,
                            help='hidden size of LSTM [default: 300]')
     model_cfg.add_argument('--maxlen', type=int, default=200,
                            help='hidden size of LSTM [default: 300]')
-    model_cfg.add_argument('--dropout', type=float, default=0.5, help='the probability for dropout [default: 0.5]')
+    model_cfg.add_argument('--dropout', type=float, default=0.2, help='the probability for dropout [default: 0.5]')  # TODO
     model_cfg.add_argument('--l2_emb', type=float, default=0.0, help='penalty term coefficient [default: 0.1]')
     model_cfg.add_argument('--num_blocks', type=int, default=2,
                            help='d_a size [default: 150]')
@@ -153,10 +155,10 @@ if __name__ == '__main__':
     print('\nAverage sequence length: %.2f' % (cc / len(user_train)))
 
     # TODO
-    model = SASRec(usernum, itemnum, args)
+    model = SASRec(itemnum, args)
     print("=> loading weights from '{}'".format(args.model_path))
     assert os.path.isfile(args.model_path), "=> no checkpoint found at '{}'".format(args.model_path)
     checkpoint = paddle.load(args.model_path)
     model.set_state_dict(checkpoint['state_dict'])
 
-    evaluate(dataset, model, 0, 0, args, is_val=False)
+    evaluate(dataset, model, checkpoint['epoch'], 0, args, is_val=False)

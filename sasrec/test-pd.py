@@ -5,16 +5,7 @@ import paddle
 import paddle.nn.functional as F
 
 
-class MyBCEWithLogitLoss(paddle.nn.Layer):
-    def __init__(self):
-        super(MyBCEWithLogitLoss, self).__init__()
-
-    def forward(self, pos_logits, neg_logits, labels):
-        return paddle.sum(
-            - paddle.log(F.sigmoid(pos_logits) + 1e-24) * labels -
-            paddle.log(1 - F.sigmoid(neg_logits) + 1e-24) * labels,
-            axis=(0, 1)
-        ) / paddle.sum(labels, axis=(0, 1))
+# import paddle.fluid as fluid
 
 
 class PointWiseFeedForward(paddle.nn.Layer):
@@ -22,11 +13,11 @@ class PointWiseFeedForward(paddle.nn.Layer):
         super(PointWiseFeedForward, self).__init__()
 
         self.conv1 = paddle.nn.Conv1D(hidden_units, hidden_units, kernel_size=1,
-                                      weight_attr=paddle.ParamAttr(initializer=initializer))
+                                      weight_attr=initializer)
         self.dropout1 = paddle.nn.Dropout(p=dropout)
         self.relu = paddle.nn.ReLU()
         self.conv2 = paddle.nn.Conv1D(hidden_units, hidden_units, kernel_size=1,
-                                      weight_attr=paddle.ParamAttr(initializer=initializer))
+                                      weight_attr=initializer)
         self.dropout2 = paddle.nn.Dropout(p=dropout)
 
     def forward(self, inputs):
@@ -44,8 +35,7 @@ class SASRec(paddle.nn.Layer):
     def __init__(self, user_num, item_num, args):
         super(SASRec, self).__init__()
 
-        # self.T = 0
-        xavier_init = paddle.nn.initializer.XavierNormal()
+        self.T = 0
 
         self.user_num = user_num
         self.item_num = item_num
@@ -60,6 +50,8 @@ class SASRec(paddle.nn.Layer):
         self.attention_layers = paddle.nn.LayerList()
         self.forward_layernorms = paddle.nn.LayerList()
         self.forward_layers = paddle.nn.LayerList()
+
+        xavier_init = paddle.nn.initializer.XavierNormal()
 
         self.last_layernorm = paddle.nn.LayerNorm(args.hidden_units, epsilon=1e-8,
                                                   weight_attr=paddle.ParamAttr(initializer=xavier_init))
@@ -86,7 +78,7 @@ class SASRec(paddle.nn.Layer):
             # self.neg_sigmoid = torch.nn.Sigmoid()
 
     def log2feats(self, log_seqs):
-        seqs = self.item_emb(log_seqs)  # (bs, sl, hs)
+        seqs = self.item_emb(paddle.to_tensor(log_seqs, dtype='int64'))  # (bs, sl, hs)
         seqs *= self.item_emb._embedding_dim ** 0.5
         positions = np.tile(np.array(range(log_seqs.shape[1])), [log_seqs.shape[0], 1])
         seqs += self.pos_emb(paddle.to_tensor(positions, dtype='int64'))
@@ -98,7 +90,7 @@ class SASRec(paddle.nn.Layer):
         tl = seqs.shape[1]  # time dim len for enforce causality
         attention_mask = paddle.logical_not(paddle.tril(paddle.ones((tl, tl), dtype='bool')))
 
-        # t0 = time.time()
+        t0 = time.time()
         for i in range(len(self.attention_layers)):
             Q = self.attention_layernorms[i](seqs)
             mha_outputs = self.attention_layers[i](Q, seqs, seqs,
@@ -110,7 +102,7 @@ class SASRec(paddle.nn.Layer):
             seqs = self.forward_layernorms[i](seqs)
             seqs = self.forward_layers[i](seqs)
             seqs *= paddle.logical_not(timeline_mask.unsqueeze(-1))
-        # self.T += (time.time() - t0)
+        self.T += (time.time() - t0)
 
         log_feats = self.last_layernorm(seqs)  # (U, T, C) -> (U, -1, C)
 
@@ -119,8 +111,8 @@ class SASRec(paddle.nn.Layer):
     def forward(self, user_ids, log_seqs, pos_seqs, neg_seqs):  # for training
         log_feats = self.log2feats(log_seqs)  # user_ids hasn't been used yet
 
-        pos_embs = self.item_emb(pos_seqs)
-        neg_embs = self.item_emb(neg_seqs)
+        pos_embs = self.item_emb(paddle.to_tensor(pos_seqs, dtype='int64'))
+        neg_embs = self.item_emb(paddle.to_tensor(neg_seqs, dtype='int64'))
 
         pos_logits = (log_feats * pos_embs).sum(axis=-1)
         neg_logits = (log_feats * neg_embs).sum(axis=-1)
@@ -135,10 +127,21 @@ class SASRec(paddle.nn.Layer):
 
         final_feat = log_feats[:, -1, :]  # only use last QKV classifier, a waste
 
-        item_embs = self.item_emb(item_indices)  # (U, I, C)
+        item_embs = self.item_emb(paddle.to_tensor(item_indices, dtype='int64'))  # (U, I, C)
 
         logits = item_embs.matmul(final_feat.unsqueeze(-1)).squeeze(-1)
 
         # preds = self.pos_sigmoid(logits) # rank same item list for different users
 
         return logits  # preds # (U, I)
+
+
+if __name__ == '__main__':
+    paddle.set_device('gpu:0')
+    x = paddle.randn((128, 200, 50))
+    layer = PointWiseFeedForward(50, 0.5, None)
+    for i in range(100):
+        t0 = time.time()
+        for j in range(200):
+            y = layer(x)
+        print(time.time() - t0)
